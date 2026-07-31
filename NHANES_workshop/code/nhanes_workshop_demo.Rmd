@@ -1,0 +1,332 @@
+---
+title: "NHANES Workshop Demo Code"
+author: "TTS Research Technology"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+    number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message = FALSE,
+  warning = FALSE
+)
+```
+
+# Packages
+
+Install packages once if needed:
+
+```{r install-packages, eval=FALSE}
+install.packages("tidyverse")
+install.packages("haven")
+```
+
+Load packages for today:
+
+```{r packages}
+library(tidyverse)
+library(haven)
+```
+
+# Paths
+
+This R Markdown file lives in the `code` folder. The `..` below means "go up one folder" to the main workshop folder.
+
+```{r define-paths}
+relative_path <- "../data/raw"
+processed_path <- "../data/processed"
+figure_path <- "../outputs/figures"
+
+relative_path
+```
+
+Use `file.path()` instead of typing a long path by hand.
+
+```{r file-path-example}
+file.path(relative_path, "DEMO_J.xpt")
+```
+
+# Import NHANES Files
+
+The workshop uses three NHANES 2017-2018 files:
+
+- `DEMO_J.xpt`: demographics
+- `BMX_J.xpt`: body measures, including BMI
+- `DR1TOT_J.xpt`: Day 1 dietary intake
+
+```{r import-xpt}
+demo_data <- read_xpt(file.path(relative_path, "DEMO_J.xpt"))
+bmx_data <- read_xpt(file.path(relative_path, "BMX_J.xpt"))
+diet_data <- read_xpt(file.path(relative_path, "DR1TOT_J.xpt"))
+```
+
+Check that each object imported correctly.
+
+```{r inspect-data}
+head(demo_data, n = 5)
+head(bmx_data, n = 5)
+head(diet_data, n = 5)
+```
+
+Use `glimpse()` when you want a compact list of variable names and types. To keep the handout readable, this example shows only a few demographic variables.
+
+```{r glimpse-data}
+demo_data %>%
+  select(SEQN, RIDAGEYR, RIAGENDR, WTINT2YR, WTMEC2YR, SDMVSTRA, SDMVPSU) %>%
+  glimpse()
+```
+
+# Check the Join Key
+
+Most participant-level NHANES files use `SEQN` as the respondent identifier. Before joining, check whether each file has one row per `SEQN`.
+
+```{r check-duplicates}
+demo_data %>%
+  count(SEQN) %>%
+  filter(n > 1)
+
+bmx_data %>%
+  count(SEQN) %>%
+  filter(n > 1)
+
+diet_data %>%
+  count(SEQN) %>%
+  filter(n > 1)
+```
+
+If no rows are printed, this demo has no duplicate `SEQN` values in these files.
+
+# Select Variables
+
+Keep the variables used later for joining, plotting, and missing-value checks.
+
+```{r select-vars}
+demo_small <- demo_data %>%
+  select(SEQN, RIDAGEYR, RIAGENDR)
+
+bmx_small <- bmx_data %>%
+  select(SEQN, BMXBMI)
+
+diet_small <- diet_data %>%
+  select(SEQN, DR1TKCAL)
+```
+
+Check missing values before the join:
+
+```{r missing-before-join}
+missing_before_join <- bind_rows(
+  demo_small %>%
+    summarize(across(everything(), ~ sum(is.na(.)))) %>%
+    mutate(file = "DEMO_J"),
+  bmx_small %>%
+    summarize(across(everything(), ~ sum(is.na(.)))) %>%
+    mutate(file = "BMX_J"),
+  diet_small %>%
+    summarize(across(everything(), ~ sum(is.na(.)))) %>%
+    mutate(file = "DR1TOT_J")
+) %>%
+  relocate(file)
+
+missing_before_join
+```
+
+# Join Tables
+
+Use `left_join()` to add columns from one participant-level file to another.
+
+```{r join-tables}
+nhanes_joined <- demo_small %>%
+  left_join(bmx_small, by = "SEQN") %>%
+  left_join(diet_small, by = "SEQN")
+
+glimpse(nhanes_joined)
+```
+
+Because we started with `demo_small` and used `left_join()`, the row count should match the demographic file.
+
+```{r check-joined-dimensions}
+row_counts <- tibble(
+  table = c("demo_small", "bmx_small", "diet_small", "nhanes_joined"),
+  rows = c(
+    nrow(demo_small),
+    nrow(bmx_small),
+    nrow(diet_small),
+    nrow(nhanes_joined)
+  )
+)
+
+row_counts
+```
+
+After a left join, variables from unmatched files become `NA`.
+
+```{r missing-after-join}
+nhanes_joined %>%
+  summarize(across(everything(), ~ sum(is.na(.)))) %>%
+  pivot_longer(
+    cols = everything(),
+    names_to = "variable",
+    values_to = "missing_n"
+  )
+```
+
+# Save the Joined Dataset
+
+Save a CSV copy in `data/processed`.
+
+```{r save-processed}
+write_csv(nhanes_joined, file.path(processed_path, "nhanes_joined_demo.csv"))
+```
+
+# Recode Variables
+
+NHANES often stores categories as numbers. For this example, `RIAGENDR == 1` means Male and `RIAGENDR == 2` means Female.
+
+The BMI groups below are analyst-created categories for teaching and visualization. The fixed cut points shown here are adult BMI cut points.
+
+```{r recode}
+nhanes_clean <- nhanes_joined %>%
+  mutate(
+    sex = case_when(
+      RIAGENDR == 1 ~ "Male",
+      RIAGENDR == 2 ~ "Female",
+      TRUE ~ NA_character_
+    ),
+    bmi_group = case_when(
+      is.na(BMXBMI) ~ NA_character_,
+      BMXBMI < 18.5 ~ "Underweight",
+      BMXBMI >= 18.5 & BMXBMI < 25 ~ "Healthy weight",
+      BMXBMI >= 25 & BMXBMI < 30 ~ "Overweight",
+      BMXBMI >= 30 ~ "Obesity"
+    ),
+    bmi_group = factor(
+      bmi_group,
+      levels = c("Underweight", "Healthy weight", "Overweight", "Obesity")
+    ),
+    age_group = case_when(
+      is.na(RIDAGEYR) ~ NA_character_,
+      RIDAGEYR < 40 ~ "Younger than 40",
+      RIDAGEYR >= 40 & RIDAGEYR < 60 ~ "40 to 59",
+      RIDAGEYR >= 60 ~ "60 or older"
+    )
+  )
+
+nhanes_clean %>%
+  select(SEQN, RIDAGEYR, age_group, sex, BMXBMI, bmi_group, DR1TKCAL)
+```
+
+Use `glimpse()` again to see how the new character and factor variables differ from the original numeric variables.
+
+```{r glimpse-after-recode}
+nhanes_clean %>%
+  select(SEQN, RIDAGEYR, age_group, sex, BMXBMI, bmi_group, DR1TKCAL) %>%
+  glimpse()
+```
+
+# Plot 1: BMI by Age
+
+In `ggplot2`, start with a dataset, map variables to visual features, then add layers.
+
+```{r plot-bmi-age}
+bmi_age_plot <- ggplot(
+  data = nhanes_clean,
+  mapping = aes(x = RIDAGEYR, y = BMXBMI, color = sex)
+) +
+  geom_point(size = 2.5, alpha = 0.75) +
+  labs(
+    title = "BMI by age in the NHANES workshop sample",
+    x = "Age in years",
+    y = "Body mass index",
+    color = "Sex"
+  ) +
+  theme_minimal()
+
+bmi_age_plot
+```
+
+Save the figure:
+
+```{r save-bmi-age}
+ggsave(
+  filename = file.path(figure_path, "bmi_by_age.png"),
+  plot = bmi_age_plot,
+  width = 7,
+  height = 4.5,
+  dpi = 300
+)
+```
+
+# Plot 2: Energy Intake by BMI Group
+
+This plot uses `BMXBMI` from the body-measures file and `DR1TKCAL` from the dietary file.
+
+```{r plot-energy-bmi}
+energy_plot <- ggplot(
+  data = nhanes_clean,
+  mapping = aes(x = bmi_group, y = DR1TKCAL)
+) +
+  geom_violin(fill = "#D8ECF8", color = "#2C5D75", trim = FALSE, na.rm = TRUE) +
+  geom_boxplot(width = 0.14, outlier.shape = NA, fill = "white", na.rm = TRUE) +
+  labs(
+    title = "Day 1 energy intake by BMI group",
+    x = "BMI group",
+    y = "Day 1 total energy intake, kcal"
+  ) +
+  theme_minimal()
+
+energy_plot
+```
+
+Save the figure:
+
+```{r save-energy-bmi}
+ggsave(
+  filename = file.path(figure_path, "energy_by_bmi_group.png"),
+  plot = energy_plot,
+  width = 7,
+  height = 4.5,
+  dpi = 300
+)
+```
+
+Important interpretation reminder: this is an unweighted plot. It is useful for learning data structure and visualization, but it is not a population estimate.
+
+# Practice Plot
+
+Modify the first plot so it shows BMI group and sex.
+
+```{r practice-plot}
+practice_plot <- ggplot(
+  data = nhanes_clean,
+  mapping = aes(x = RIDAGEYR, y = BMXBMI, color = bmi_group)
+) +
+  geom_point(size = 2.5, alpha = 0.75) +
+  facet_wrap(~ sex) +
+  labs(
+    title = "BMI by age, BMI group, and sex",
+    x = "Age in years",
+    y = "Body mass index",
+    color = "BMI group"
+  ) +
+  theme_minimal()
+
+practice_plot
+
+ggsave(
+  filename = file.path(figure_path, "practice_bmi_by_age.png"),
+  plot = practice_plot,
+  width = 8,
+  height = 4.5,
+  dpi = 300
+)
+```
+
+Write two notes after running your plot:
+
+1. One pattern you notice.
+2. One reason this plot should not be treated as a final NHANES estimate.
