@@ -58,6 +58,22 @@ NHANES_workshop/code/nhanes_workshop_demo.Rmd
 
 You may also choose to type along in a new R Markdown file. If you do this, save the new file inside the `NHANES_workshop/code/` folder. Keeping the R Markdown file in `code/` allows the relative paths used in the workshop, such as `../data/raw`, to work with the prepared folder structure.
 
+### 5. Install Required R Packages
+
+The live demo uses two R packages:
+
+- `tidyverse`: data wrangling and visualization, including `dplyr`, `readr`, and `ggplot2`.
+- `haven`: importing NHANES SAS transport files (`.XPT`).
+
+If you have not installed these packages before, run the following commands in the RStudio Console. You only need to install packages once on your computer.
+
+```r
+install.packages("tidyverse")
+install.packages("haven")
+```
+
+During the workshop, the R Markdown file will load the packages with `library(tidyverse)` and `library(haven)`.
+
 You are now ready for the workshop.
 
 ## How to Use the Materials
